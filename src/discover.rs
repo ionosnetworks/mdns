@@ -61,6 +61,17 @@ where
     interface(service_name, mdns_query_interval, Ipv4Addr::new(0, 0, 0, 0))
 }
 
+pub fn all_addr<S>(
+    service_name: S,
+    mdns_query_interval: Duration,
+    addr: Ipv4Addr,
+) -> Result<Discovery, Error>
+where
+    S: AsRef<str>,
+{
+    interface(service_name, mdns_query_interval, addr)
+}
+
 /// Gets an iterator over all responses for a given service on a given interface.
 pub fn interface<S>(
     service_name: S,

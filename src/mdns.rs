@@ -25,7 +25,7 @@ pub fn mdns_interface(
     service_name: String,
     interface_addr: Ipv4Addr,
 ) -> Result<(mDNSListener, mDNSSender), Error> {
-    let socket = create_socket()?;
+    let socket = create_socket(interface_addr.clone())?;
     let socket = UdpSocket::from_std(socket, &Handle::default())?;
 
     socket.set_multicast_loop_v4(false)?;
@@ -44,21 +44,19 @@ pub fn mdns_interface(
     ))
 }
 
-const ADDR_ANY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
-
 #[cfg(not(target_os = "windows"))]
-fn create_socket() -> io::Result<std::net::UdpSocket> {
+fn create_socket(bind_addr: Ipv4Addr) -> io::Result<std::net::UdpSocket> {
     net2::UdpBuilder::new_v4()?
         .reuse_address(true)?
         .reuse_port(true)?
-        .bind((ADDR_ANY, 46383))
+        .bind((bind_addr, 46383))
 }
 
 #[cfg(target_os = "windows")]
-fn create_socket() -> io::Result<std::net::UdpSocket> {
+fn create_socket(bind_addr: Ipv4Addr) -> io::Result<std::net::UdpSocket> {
     net2::UdpBuilder::new_v4()?
         .reuse_address(true)?
-        .bind((ADDR_ANY, 46383))
+        .bind((bind_addr, 46383))
 }
 
 /// An mDNS sender on a specific interface.
