@@ -83,9 +83,11 @@ impl mDNSSender {
 
         // self.send.send(&packet_data, &addr).compat().await?;
         // let send = self.send.clone();
-        let send = self.send.take().unwrap();
-        self.send
-            .replace(send.send((packet_data, addr)).compat().await?);
+        if self.send.is_some() {
+            let send = self.send.take().unwrap();
+            self.send
+                .replace(send.send((packet_data, addr)).compat().await?);
+        }
 
         Ok(())
     }
