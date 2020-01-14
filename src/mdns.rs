@@ -45,14 +45,14 @@ fn create_socket() -> io::Result<std::net::UdpSocket> {
     net2::UdpBuilder::new_v4()?
         .reuse_address(true)?
         .reuse_port(true)?
-        .bind((ADDR_ANY, MULTICAST_PORT))
+        .bind((ADDR_ANY, 46383))
 }
 
 #[cfg(target_os = "windows")]
 fn create_socket() -> io::Result<std::net::UdpSocket> {
     net2::UdpBuilder::new_v4()?
         .reuse_address(true)?
-        .bind((ADDR_ANY, MULTICAST_PORT))
+        .bind((ADDR_ANY, 46383))
 }
 
 /// An mDNS sender on a specific interface.
