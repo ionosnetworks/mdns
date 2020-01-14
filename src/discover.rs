@@ -26,11 +26,12 @@ use crate::{mDNSListener, Error, Response};
 
 use std::time::Duration;
 
-use tokio::time;
+use tokio_timer;
 
 use crate::mdns::{mDNSSender, mdns_interface};
 use async_stream::stream;
 use futures_core::Stream;
+use futures_util::compat::Stream01CompatExt;
 use futures_util::{future::ready, stream::select, StreamExt};
 use std::net::Ipv4Addr;
 
@@ -49,7 +50,7 @@ pub struct Discovery {
     ignore_empty: bool,
 
     /// The interval we should send mDNS queries.
-    send_request_interval: time::Interval,
+    send_request_interval: tokio_timer::Interval,
 }
 
 /// Gets an iterator over all responses for a given service on all interfaces.
@@ -77,7 +78,7 @@ where
         mdns_sender,
         mdns_listener,
         ignore_empty: true,
-        send_request_interval: time::interval(mdns_query_interval),
+        send_request_interval: tokio_timer::Interval::new_interval(mdns_query_interval),
     })
 }
 
@@ -91,12 +92,13 @@ impl Discovery {
     }
 
     fn interval_send(
-        mut interval: time::Interval,
+        interval: tokio_timer::Interval,
         mut sender: mDNSSender,
     ) -> impl Stream<Item = ()> {
+        let mut interval = interval.compat();
         stream! {
             loop {
-                interval.tick().await;
+                interval.next().await;
                 let _ = sender.send_request().await;
 
                 yield;

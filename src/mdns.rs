@@ -2,13 +2,16 @@ use crate::{Error, Response};
 
 use std::{io, net::Ipv4Addr};
 
-use async_stream::try_stream;
+use bytes::Bytes;
+use futures01::sink::Sink as Sink01;
+use futures01::stream::Stream as Stream01;
 use futures_core::Stream;
+use futures_util::compat::Future01CompatExt;
+use futures_util::compat::Stream01CompatExt;
 use net2;
-use tokio::net::{
-    udp::{RecvHalf, SendHalf},
-    UdpSocket,
-};
+use tokio_codec::BytesCodec;
+use tokio_reactor::Handle;
+use tokio_udp::{UdpFramed, UdpSocket};
 
 #[cfg(not(target_os = "windows"))]
 use net2::unix::UnixUdpBuilderExt;
@@ -23,18 +26,21 @@ pub fn mdns_interface(
     interface_addr: Ipv4Addr,
 ) -> Result<(mDNSListener, mDNSSender), Error> {
     let socket = create_socket()?;
-    let socket = UdpSocket::from_std(socket)?;
+    let socket = UdpSocket::from_std(socket, &Handle::default())?;
 
     socket.set_multicast_loop_v4(false)?;
-    socket.join_multicast_v4(MULTICAST_ADDR, interface_addr)?;
+    socket.join_multicast_v4(&MULTICAST_ADDR, &interface_addr)?;
 
-    let (recv, send) = socket.split();
+    let framer = UdpFramed::new(socket, BytesCodec::new());
 
-    let recv_buffer = vec![0; 4096];
+    let (send, recv) = framer.split();
 
     Ok((
-        mDNSListener { recv, recv_buffer },
-        mDNSSender { service_name, send },
+        mDNSListener { recv },
+        mDNSSender {
+            service_name,
+            send: Some(send),
+        },
     ))
 }
 
@@ -59,7 +65,7 @@ fn create_socket() -> io::Result<std::net::UdpSocket> {
 #[allow(non_camel_case_types)]
 pub struct mDNSSender {
     service_name: String,
-    send: SendHalf,
+    send: Option<futures01::stream::SplitSink<UdpFramed<BytesCodec>>>,
 }
 
 impl mDNSSender {
@@ -73,11 +79,16 @@ impl mDNSSender {
             dns_parser::QueryType::PTR,
             dns_parser::QueryClass::IN,
         );
-        let packet_data = builder.build().unwrap();
+        let packet_data = Bytes::from(builder.build().unwrap());
 
         let addr = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
-        self.send.send_to(&packet_data, &addr).await?;
+        // self.send.send(&packet_data, &addr).compat().await?;
+        // let send = self.send.clone();
+        let send = self.send.take().unwrap();
+        self.send
+            .replace(send.send((packet_data, addr)).compat().await?);
+
         Ok(())
     }
 }
@@ -85,23 +96,17 @@ impl mDNSSender {
 /// An mDNS listener on a specific interface.
 #[allow(non_camel_case_types)]
 pub struct mDNSListener {
-    recv: RecvHalf,
-    recv_buffer: Vec<u8>,
+    recv: futures01::stream::SplitStream<UdpFramed<BytesCodec>>,
 }
 
 impl mDNSListener {
-    pub fn listen(mut self) -> impl Stream<Item = Result<Response, Error>> {
-        try_stream! {
-            loop {
-                let (count, _) = self.recv.recv_from(&mut self.recv_buffer).await?;
-
-                if count > 0 {
-                    match dns_parser::Packet::parse(&self.recv_buffer[..count]) {
-                        Ok(raw_packet) => yield Response::from_packet(&raw_packet),
-                        Err(e) => eprintln!("{}, {:?}", e, &self.recv_buffer[..count])
-                    }
-                }
-            }
-        }
+    pub fn listen(self) -> impl Stream<Item = Result<Response, Error>> {
+        self.recv
+            .filter_map(|(buff, _)| match dns_parser::Packet::parse(&buff) {
+                Ok(raw_packet) => Some(Response::from_packet(&raw_packet)),
+                Err(_) => None,
+            })
+            .map_err(|err| Error::from(err))
+            .compat()
     }
 }

@@ -22,9 +22,12 @@ dns-parser = "0.8.0"
 net2 = "0.2"
 err-derive = "0.2.1"
 futures-core = "0.3.1"
-futures-util = "0.3.1"
+futures-util = { version = "0.3.1", features = ["compat"] }
 async-stream = "0.2.0"
-tokio = { version = "0.2.4", features = ["time", "udp", "stream"] }
-
-[dev-dependencies]
-tokio = { version = "0.2.4", features = ["macros"] }
+tokio-timer = "0.2.6"
+tokio-udp = "0.1.5"
+tokio-codec = "0.1.1"
+futures01 = { package = "futures", version = "0.1" }
+tokio-io = "0.1.12"
+bytes = "0.4"
+tokio-reactor = "0.1.11"
