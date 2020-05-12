@@ -26,13 +26,11 @@ use crate::{mDNSListener, Error, Response};
 
 use std::time::Duration;
 
-use tokio_timer;
+use tokio;
 
 use crate::mdns::{mDNSSender, mdns_interface};
 use async_stream::stream;
-use futures_core::Stream;
-use futures_util::compat::Stream01CompatExt;
-use futures_util::{future::ready, stream::select, StreamExt};
+use futures::prelude::*;
 use std::net::Ipv4Addr;
 
 /// A multicast DNS discovery request.
@@ -50,7 +48,7 @@ pub struct Discovery {
     ignore_empty: bool,
 
     /// The interval we should send mDNS queries.
-    send_request_interval: tokio_timer::Interval,
+    send_request_interval: tokio::time::Interval,
 }
 
 /// Gets an iterator over all responses for a given service on all interfaces.
@@ -89,7 +87,7 @@ where
         mdns_sender,
         mdns_listener,
         ignore_empty: true,
-        send_request_interval: tokio_timer::Interval::new_interval(mdns_query_interval),
+        send_request_interval: tokio::time::interval(mdns_query_interval),
     })
 }
 
@@ -103,10 +101,9 @@ impl Discovery {
     }
 
     fn interval_send(
-        interval: tokio_timer::Interval,
+        mut interval: tokio::time::Interval,
         mut sender: mDNSSender,
     ) -> impl Stream<Item = ()> {
-        let mut interval = interval.compat();
         stream! {
             loop {
                 interval.next().await;
@@ -125,18 +122,16 @@ impl Discovery {
         let interval_stream = Self::interval_send(self.send_request_interval, self.mdns_sender)
             .map(|_| StreamResult::Interval);
 
-        let stream = select(response_stream, interval_stream);
+        let stream = futures::stream::select(response_stream, interval_stream);
         stream
-            .filter_map(|stream_result| {
-                async {
-                    match stream_result {
-                        StreamResult::Interval => None,
-                        StreamResult::Response(res) => Some(res),
-                    }
+            .filter_map(|stream_result| async {
+                match stream_result {
+                    StreamResult::Interval => None,
+                    StreamResult::Response(res) => Some(res),
                 }
             })
             .filter(move |res| {
-                ready(match res {
+                futures::future::ready(match res {
                     Ok(response) => {
                         (!response.is_empty() || !ignore_empty)
                             && response

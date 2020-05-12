@@ -3,15 +3,11 @@ use crate::{Error, Response};
 use std::{io, net::Ipv4Addr};
 
 use bytes::Bytes;
-use futures01::sink::Sink as Sink01;
-use futures01::stream::Stream as Stream01;
-use futures_core::Stream;
-use futures_util::compat::Future01CompatExt;
-use futures_util::compat::Stream01CompatExt;
+use futures::prelude::*;
 use net2;
-use tokio_codec::BytesCodec;
-use tokio_reactor::Handle;
-use tokio_udp::{UdpFramed, UdpSocket};
+use tokio::net::UdpSocket;
+use tokio_util::codec::BytesCodec;
+use tokio_util::udp::UdpFramed;
 
 #[cfg(not(target_os = "windows"))]
 use net2::unix::UnixUdpBuilderExt;
@@ -26,10 +22,10 @@ pub fn mdns_interface(
     interface_addr: Ipv4Addr,
 ) -> Result<(mDNSListener, mDNSSender), Error> {
     let socket = create_socket(interface_addr.clone())?;
-    let socket = UdpSocket::from_std(socket, &Handle::default())?;
+    let socket = UdpSocket::from_std(socket)?;
 
     socket.set_multicast_loop_v4(false)?;
-    socket.join_multicast_v4(&MULTICAST_ADDR, &interface_addr)?;
+    socket.join_multicast_v4(MULTICAST_ADDR, interface_addr)?;
 
     let framer = UdpFramed::new(socket, BytesCodec::new());
 
@@ -39,7 +35,7 @@ pub fn mdns_interface(
         mDNSListener { recv },
         mDNSSender {
             service_name,
-            send: Some(send),
+            send: send,
         },
     ))
 }
@@ -63,7 +59,7 @@ fn create_socket(bind_addr: Ipv4Addr) -> io::Result<std::net::UdpSocket> {
 #[allow(non_camel_case_types)]
 pub struct mDNSSender {
     service_name: String,
-    send: Option<futures01::stream::SplitSink<UdpFramed<BytesCodec>>>,
+    send: futures::stream::SplitSink<UdpFramed<BytesCodec>, (Bytes, std::net::SocketAddr)>,
 }
 
 impl mDNSSender {
@@ -81,13 +77,7 @@ impl mDNSSender {
 
         let addr = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
-        // self.send.send(&packet_data, &addr).compat().await?;
-        // let send = self.send.clone();
-        if self.send.is_some() {
-            let send = self.send.take().unwrap();
-            self.send
-                .replace(send.send((packet_data, addr)).compat().await?);
-        }
+        self.send.send((packet_data, addr)).await?;
 
         Ok(())
     }
@@ -96,17 +86,18 @@ impl mDNSSender {
 /// An mDNS listener on a specific interface.
 #[allow(non_camel_case_types)]
 pub struct mDNSListener {
-    recv: futures01::stream::SplitStream<UdpFramed<BytesCodec>>,
+    recv: futures::stream::SplitStream<UdpFramed<BytesCodec>>,
 }
 
 impl mDNSListener {
     pub fn listen(self) -> impl Stream<Item = Result<Response, Error>> {
         self.recv
-            .filter_map(|(buff, _)| match dns_parser::Packet::parse(&buff) {
-                Ok(raw_packet) => Some(Response::from_packet(&raw_packet)),
-                Err(_) => None,
+            .try_filter_map(|(buff, _)| async move {
+                match dns_parser::Packet::parse(&buff) {
+                    Ok(raw_packet) => Ok(Some(Response::from_packet(&raw_packet))),
+                    Err(_) => Ok(None),
+                }
             })
             .map_err(|err| Error::from(err))
-            .compat()
     }
 }
